@@ -10,6 +10,21 @@ Je geeft een paar invoerwaarden (zoals m2-prijs en rente), en het model berekent
 
 ---
 
+## Ja, we kunnen makkelijk een GUI maken
+Ja — met **Streamlit** kun je heel snel sliders + grafieken krijgen.
+
+Start de GUI zo:
+```bash
+pip install -r requirements.txt
+streamlit run app/streamlit_app.py
+```
+
+Daarmee krijg je:
+- sliders voor o.a. oppervlakte, prijs per m2, rente, waardegroei, inkomen, OZB en onderhoud
+- grafiek met maandelijkse user cost vs cash-out
+- grafiek met kostencomponenten (rente, OZB, onderhoud, HRA)
+- grafiek van user cost / inkomen
+
 ## 1) Hoe je het gebruikt (in 20 seconden)
 
 ```bash
