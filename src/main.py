@@ -1,0 +1,54 @@
+from __future__ import annotations
+
+import argparse
+import csv
+from dataclasses import asdict
+from pathlib import Path
+
+from housing_user_cost import HousingCostInput, simulate_yearly_housing_costs
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Bereken maandelijkse gebruikskosten per jaar voor een annuïtaire hypotheek."
+    )
+    parser.add_argument("--floor-area-m2", type=float, default=85)
+    parser.add_argument("--purchase-price-per-m2", type=float, default=4_500)
+    parser.add_argument("--annual-mortgage-rate", type=float, default=0.04)
+    parser.add_argument("--annual-home-value-growth-rate", type=float, default=0.02)
+    parser.add_argument("--gross-household-income-start", type=float, default=60_000)
+    parser.add_argument("--annual-income-growth-rate", type=float, default=0.03)
+    parser.add_argument("--output-csv", type=Path, default=Path("output/yearly_housing_costs.csv"))
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+
+    inputs = HousingCostInput(
+        floor_area_m2=args.floor_area_m2,
+        purchase_price_per_m2=args.purchase_price_per_m2,
+        annual_mortgage_rate=args.annual_mortgage_rate,
+        annual_home_value_growth_rate=args.annual_home_value_growth_rate,
+        gross_household_income_start=args.gross_household_income_start,
+        annual_income_growth_rate=args.annual_income_growth_rate,
+    )
+
+    rows = simulate_yearly_housing_costs(inputs)
+
+    args.output_csv.parent.mkdir(parents=True, exist_ok=True)
+    with args.output_csv.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(asdict(rows[0]).keys()))
+        writer.writeheader()
+        writer.writerows(asdict(row) for row in rows)
+
+    print("Jaar | Maandelijkse gebruikskosten (excl. aflossing) | Maandelijkse cash-out (incl. aflossing)")
+    for row in rows[:5]:
+        print(
+            f"{row.year:>4} | € {row.monthly_user_cost_excluding_principal:>10.2f} | € {row.monthly_cash_outflow_including_principal:>10.2f}"
+        )
+    print(f"\nCSV opgeslagen op: {args.output_csv}")
+
+
+if __name__ == "__main__":
+    main()
