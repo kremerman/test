@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 
 @dataclass(frozen=True)
@@ -17,7 +17,6 @@ class HousingCostInput:
     household_size: int = 2
     annual_property_tax_rate: float = 0.001
     annual_maintenance_rate: float = 0.01
-    annual_inflation_rate: float = 0.02
     annual_required_return_rate: float = 0.03
     annual_imputed_rent_rate: float = 0.0035
     mortgage_interest_deductible_fraction: float = 1.0
@@ -25,6 +24,14 @@ class HousingCostInput:
     wet_hillen_fraction: float = 0.0
     transfer_tax_rate_owner_occupier: float = 0.02
     other_purchase_cost_rate: float = 0.03
+
+    annual_market_rent_per_m2: float = 220.0
+    annual_market_rent_growth_rate: float = 0.02
+
+    tax_policy_change_year: Optional[int] = None
+    post_change_annual_imputed_rent_rate: Optional[float] = None
+    post_change_mortgage_interest_deductible_fraction: Optional[float] = None
+    post_change_annual_home_value_growth_rate_delta: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -44,6 +51,9 @@ class YearlyHousingCost:
     annual_user_cost_excluding_principal: float
     monthly_user_cost_excluding_principal: float
     monthly_cash_outflow_including_principal: float
+    annual_market_rent_cost: float
+    monthly_market_rent_cost: float
+    monthly_owner_user_cost_minus_renter_market_cost: float
     gross_household_income: float
     user_cost_income_ratio: float
 
@@ -59,11 +69,15 @@ def _annuity_monthly_payment(loan_principal: float, annual_rate: float, months: 
     return loan_principal * (monthly_rate * factor) / (factor - 1)
 
 
+def _has_policy_change(inputs: HousingCostInput, year: int) -> bool:
+    return inputs.tax_policy_change_year is not None and year >= inputs.tax_policy_change_year
+
+
 def simulate_yearly_housing_costs(inputs: HousingCostInput) -> List[YearlyHousingCost]:
-    home_value_start = inputs.floor_area_m2 * inputs.purchase_price_per_m2
     if not 0 <= inputs.down_payment_fraction < 1:
         raise ValueError("down_payment_fraction must be in [0, 1)")
 
+    home_value_start = inputs.floor_area_m2 * inputs.purchase_price_per_m2
     mortgage_principal = home_value_start * (1 - inputs.down_payment_fraction)
     total_months = inputs.mortgage_term_years * 12
     monthly_payment = _annuity_monthly_payment(
@@ -81,8 +95,10 @@ def simulate_yearly_housing_costs(inputs: HousingCostInput) -> List[YearlyHousin
     remaining_balance = mortgage_principal
     rows: List[YearlyHousingCost] = []
 
+    home_value = home_value_start
+    market_rent_per_m2 = inputs.annual_market_rent_per_m2
+
     for year in range(1, inputs.mortgage_term_years + 1):
-        home_value = home_value_start * ((1 + inputs.annual_home_value_growth_rate) ** (year - 1))
         annual_interest_paid = 0.0
         annual_principal_paid = 0.0
 
@@ -98,20 +114,36 @@ def simulate_yearly_housing_costs(inputs: HousingCostInput) -> List[YearlyHousin
             annual_principal_paid += monthly_principal
 
         annual_mortgage_payment = annual_interest_paid + annual_principal_paid
+
+        policy_active = _has_policy_change(inputs, year)
+        current_imputed_rent_rate = (
+            inputs.post_change_annual_imputed_rent_rate
+            if policy_active and inputs.post_change_annual_imputed_rent_rate is not None
+            else inputs.annual_imputed_rent_rate
+        )
+        current_hra_deductible_fraction = (
+            inputs.post_change_mortgage_interest_deductible_fraction
+            if policy_active and inputs.post_change_mortgage_interest_deductible_fraction is not None
+            else inputs.mortgage_interest_deductible_fraction
+        )
+
         annual_tax_benefit_hra = (
-            annual_interest_paid
-            * inputs.mortgage_interest_deductible_fraction
-            * inputs.mortgage_interest_tax_rate
+            annual_interest_paid * current_hra_deductible_fraction * inputs.mortgage_interest_tax_rate
         )
         annual_property_tax = home_value * inputs.annual_property_tax_rate
         annual_maintenance = home_value * inputs.annual_maintenance_rate
 
-        gross_imputed_rent = home_value * inputs.annual_imputed_rent_rate
+        gross_imputed_rent = home_value * current_imputed_rent_rate
         hillen_discount = gross_imputed_rent * inputs.wet_hillen_fraction
         annual_imputed_rent_tax = max(0.0, gross_imputed_rent - hillen_discount) * inputs.mortgage_interest_tax_rate
 
         annual_required_return_cost = home_value * inputs.annual_required_return_rate
-        annual_expected_capital_gain = home_value * inputs.annual_home_value_growth_rate
+
+        current_home_value_growth_rate = (
+            inputs.annual_home_value_growth_rate
+            + (inputs.post_change_annual_home_value_growth_rate_delta if policy_active else 0.0)
+        )
+        annual_expected_capital_gain = home_value * current_home_value_growth_rate
 
         annual_user_cost_excluding_principal = (
             annual_interest_paid
@@ -133,6 +165,12 @@ def simulate_yearly_housing_costs(inputs: HousingCostInput) -> List[YearlyHousin
             + annualized_purchase_cost
             - annual_tax_benefit_hra
         ) / 12
+
+        annual_market_rent_cost = inputs.floor_area_m2 * market_rent_per_m2
+        monthly_market_rent_cost = annual_market_rent_cost / 12
+        monthly_owner_user_cost_minus_renter_market_cost = (
+            monthly_user_cost_excluding_principal - monthly_market_rent_cost
+        )
 
         gross_household_income = inputs.gross_household_income_start * (
             (1 + inputs.annual_income_growth_rate) ** (year - 1)
@@ -156,9 +194,15 @@ def simulate_yearly_housing_costs(inputs: HousingCostInput) -> List[YearlyHousin
                 annual_user_cost_excluding_principal=annual_user_cost_excluding_principal,
                 monthly_user_cost_excluding_principal=monthly_user_cost_excluding_principal,
                 monthly_cash_outflow_including_principal=monthly_cash_outflow_including_principal,
+                annual_market_rent_cost=annual_market_rent_cost,
+                monthly_market_rent_cost=monthly_market_rent_cost,
+                monthly_owner_user_cost_minus_renter_market_cost=monthly_owner_user_cost_minus_renter_market_cost,
                 gross_household_income=gross_household_income,
                 user_cost_income_ratio=user_cost_income_ratio,
             )
         )
+
+        home_value = home_value * (1 + current_home_value_growth_rate)
+        market_rent_per_m2 = market_rent_per_m2 * (1 + inputs.annual_market_rent_growth_rate)
 
     return rows
